@@ -1,0 +1,3 @@
+# Your actual lab report PDFs contain personal health information (name,
+# health card number, phone number) - never commit them.
+/results/
