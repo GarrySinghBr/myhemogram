@@ -1,119 +1,88 @@
 # MyHemogram
 
-A local, private blood-work tracker. Import the PDF lab reports you get from
-your doctor, and it parses out every test result, stores it, and lets you
-view a single report, compare two reports side by side, and see the
-lifetime trend of any analyte. Everything stays on your machine — there's
-no cloud sync, no external service; data lives in a SQLite file under
-`backend/data/`.
+A private, locally-deployed blood work tracker I mocked up with Claude for my
+own (Ontario-based) lab reports. Originally just wanted a way to track my
+bloodwork and biochemistry markers while dealing with Celiac's, but it grew
+to cover general lab tracking too.
 
-## How it's built
-
-- **`backend/`** — Python (FastAPI + SQLAlchemy + SQLite).
-  - `app/parser.py` turns a lab PDF into structured results using each row's
-    column position on the page (not a fixed list of test names), so a
-    report with more or fewer tests than usual still parses.
-  - `app/models.py` / `app/db.py` are the SQLite storage.
-  - `app/routers/` is the REST API: `reports.py` for report/result CRUD and
-    the PDF import flow, `analytes.py` for the cross-report views (trend,
-    compare) that read across every report by analyte name.
-- **`frontend/`** — React (Vite, no TypeScript). One page per major view
-  (`src/pages/`) plus shared pieces in `src/components/`. `src/themes.js`
-  drives the live color-theme switcher; `src/api.js` is the only place that
-  talks to the backend.
-
-```
-backend/
-  app/
-    main.py        FastAPI app + SPA static-file serving
-    db.py          SQLite engine/session
-    models.py      SQLAlchemy tables (Report, Result)
-    schemas.py     Pydantic request/response shapes
-    parser.py      PDF -> structured results
-    routers/       reports.py, analytes.py
-  tests/           pytest (parser + full API, see below)
-frontend/
-  src/
-    pages/         Dashboard, Import, ReportDetail, Trends, Compare
-    components/    shared UI (charts, badges, the review table, ...)
-    api.js, utils.js, themes.js, analyteInfo.js
-```
-
-Every PDF import goes through a **review screen** before anything is saved,
-so you can fix or add rows the parser missed — it was built against one lab's
-report layout and may not get every edge case perfect on a new one. A row
-the parser wasn't confident about is flagged (`needs_review`) until someone
-edits and confirms it, both on the review screen and after saving.
+Upload the PDF your doctor's office gives you and it gets parsed into
+structured results you can browse, compare across visits, or chart over
+time. Everything runs on your own machine — no cloud, no accounts.
 
 ## Running it
 
-You need Python 3.11+ and Node 18+.
+Needs Python 3.11+ and Node 18+.
 
-**First time setup:**
+### Windows
 
-```bash
+```
 cd backend
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt      # Windows
-# .venv/bin/pip install -r requirements.txt         # macOS/Linux
-
+.venv/Scripts/pip install -r requirements.txt
 cd ../frontend
 npm install
 ```
 
-**Day-to-day (two terminals):**
+Then, two terminals:
 
-```bash
-# Terminal 1 — backend, http://127.0.0.1:8899
+```
+# backend — http://127.0.0.1:8899
 cd backend
-.venv/Scripts/python -m uvicorn app.main:app --port 8899   # Windows
-# .venv/bin/python -m uvicorn app.main:app --port 8899      # macOS/Linux
+.venv/Scripts/python -m uvicorn app.main:app --port 8899
 
-# Terminal 2 — frontend, http://localhost:5173
+# frontend — http://localhost:5173
 cd frontend
 npm run dev
 ```
 
-Open **http://localhost:5173** — that's the app. The Vite dev server proxies
-`/api` requests to the backend, so both need to be running.
+Open **http://localhost:5173**.
 
-**Single-command / production-ish option:** build the frontend once and let
-the backend serve it directly, so you only need one process:
+### Linux / macOS
 
-```bash
-cd frontend && npm run build
-cd ../backend && .venv/Scripts/python -m uvicorn app.main:app --port 8899
+```
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cd ../frontend
+npm install
 ```
 
-Then open **http://127.0.0.1:8899** instead. This mode also has a SPA
-fallback route, so refreshing on `/trends` or any other in-app URL works
-rather than 404ing.
+Then, two terminals:
+
+```
+# backend — http://127.0.0.1:8899
+cd backend
+.venv/bin/python -m uvicorn app.main:app --port 8899
+
+# frontend — http://localhost:5173
+cd frontend
+npm run dev
+```
+
+Open **http://localhost:5173**.
+
+### Single process
+
+Build the frontend once and the backend will serve it directly, so you only
+need one terminal after that:
+
+```
+cd frontend && npm run build
+cd ../backend && <venv-python> -m uvicorn app.main:app --port 8899
+```
+
+Open **http://127.0.0.1:8899**.
 
 ## Tests
 
-```bash
-cd backend
-.venv/Scripts/python -m pytest tests/ -v
+There's a pytest suite under `backend/tests/`, mainly there so Claude could
+check its own changes while building this rather than something you need to
+run yourself. There's also a ruff/oxlint setup, but linting a one-person
+local project is fairly beside the point. If you're curious anyway:
+
 ```
-
-- `test_parser.py` parses the real sample report in `results/` and checks
-  every value, unit, reference range, and flag against known-correct
-  numbers, and makes sure none of the interpretive commentary that's printed
-  alongside some results (e.g. under eGFR, Vitamin B12, Ferritin) leaks in
-  as a fake result row.
-- `test_reports_api.py` / `test_analytes_api.py` exercise the full HTTP API
-  (`fastapi.testclient.TestClient`) against a throw-away SQLite database per
-  test — report/result CRUD, the `needs_review` sync logic, sorting, delta
-  calculation in Compare, and error handling for bad input.
-
-There's no frontend test suite yet — UI changes are currently verified by
-running the app.
-
-## Linting
-
-```bash
-cd backend && .venv/Scripts/ruff check .
-cd frontend && npm run lint          # oxlint
+cd backend
+<venv-python> -m pytest tests/ -v
 ```
 
 ## Your data
@@ -121,5 +90,5 @@ cd frontend && npm run lint          # oxlint
 - Database: `backend/data/hemogram.db`
 - Archived source PDFs: `backend/data/pdfs/`
 
-Back up that `data/` folder if you want to keep a copy of your history
-outside this machine — nothing here does that for you.
+Nothing here backs this up for you. Copy the `data/` folder yourself if you
+want a copy of your history off this machine.
