@@ -1,18 +1,19 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Import from "./pages/Import";
 import ReportDetail from "./pages/ReportDetail";
 import Trends from "./pages/Trends";
 import Compare from "./pages/Compare";
+import { LogoMark } from "./components/icons";
 
 export default function App() {
   return (
     <div className="app-shell">
       <header className="topnav">
-        <div className="brand">
-          <span className="brand-mark" />
-          MyHemogram
-        </div>
+        <Link to="/" className="brand">
+          <LogoMark />
+          <span>MyHemogram</span>
+        </Link>
         <nav>
           <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
             Reports
@@ -23,7 +24,7 @@ export default function App() {
         </nav>
         <div className="topnav-spacer" />
         <NavLink to="/import" className="btn btn-primary btn-sm">
-          + Import PDF
+          Upload report
         </NavLink>
       </header>
 

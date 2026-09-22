@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import ReviewTable from "../components/ReviewTable";
+import { UploadIcon } from "../components/icons";
 
 const BLANK_RESULT = {
   panel: "",
@@ -23,6 +24,7 @@ export default function Import() {
   const [mode, setMode] = useState("pdf"); // "pdf" | "manual"
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [fileName, setFileName] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null); // { collected_on, ordering_physician, results, upload_token, source_filename }
@@ -32,6 +34,7 @@ export default function Import() {
   async function handleFile(file) {
     if (!file) return;
     setError(null);
+    setFileName(file.name);
     setLoading(true);
     try {
       const parsed = await api.parsePdf(file);
@@ -101,11 +104,11 @@ export default function Import() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1>{preview ? "Review before saving" : "Import a blood work report"}</h1>
+          <h1>{preview ? "Review before saving" : "Upload a report"}</h1>
           <div className="page-subtitle">
             {preview
-              ? "Fix anything the parser missed or misread, then save."
-              : "Upload the PDF from your doctor, or add a report by hand."}
+              ? "Fix anything below that the parser missed or misread, then save."
+              : "Nothing is saved until you've checked it on the next screen."}
           </div>
         </div>
       </div>
@@ -128,16 +131,27 @@ export default function Import() {
               handleFile(e.dataTransfer.files?.[0]);
             }}
           >
-            {loading ? (
-              <span className="spinner" />
-            ) : (
-              <>
-                <strong>Drop a PDF here or click to browse</strong>
-                <div className="muted" style={{ marginTop: 4 }}>
-                  The report will be parsed and shown to you for review before anything is saved.
-                </div>
-              </>
-            )}
+            <div className="dropzone-icon">
+              <UploadIcon width={18} height={18} />
+            </div>
+            <div style={{ flex: 1 }}>
+              {loading ? (
+                <>
+                  <strong>Reading {fileName}…</strong>
+                  <div className="muted" style={{ marginTop: 2, fontSize: 12.5 }}>
+                    Parsing on this machine — this can take a few seconds for a longer report.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong>Choose a PDF, or drag one in</strong>
+                  <div className="muted" style={{ marginTop: 2, fontSize: 12.5 }}>
+                    The lab report your doctor's office sends you, unmodified.
+                  </div>
+                </>
+              )}
+            </div>
+            {loading && <span className="spinner" />}
           </div>
           <input
             ref={fileInput}
@@ -146,9 +160,9 @@ export default function Import() {
             style={{ display: "none" }}
             onChange={(e) => handleFile(e.target.files?.[0])}
           />
-          <div style={{ marginTop: 16, textAlign: "center" }}>
+          <div style={{ marginTop: 14 }}>
             <button className="link-btn" onClick={startManual}>
-              Or add a report manually instead
+              Enter a report manually instead
             </button>
           </div>
         </div>

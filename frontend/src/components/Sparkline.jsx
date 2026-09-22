@@ -1,6 +1,6 @@
 import { Line, LineChart, ResponsiveContainer, YAxis } from "recharts";
 
-export default function Sparkline({ points, color = "var(--accent)" }) {
+export default function Sparkline({ points, color = "var(--data-neutral)" }) {
   const data = points.map((p, i) => ({ i, v: p.value_numeric }));
   if (data.filter((d) => d.v != null).length < 2) {
     return <div style={{ width: 64, height: 24 }} />;

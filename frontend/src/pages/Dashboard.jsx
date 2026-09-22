@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { CompareIcon, DocumentIcon, LogoMark, TrendIcon } from "../components/icons";
 import { formatDate } from "../utils";
 
 export default function Dashboard() {
@@ -29,6 +30,46 @@ export default function Dashboard() {
   if (error) return <div className="page"><div className="error-banner">{error}</div></div>;
   if (!reports) return <div className="page"><span className="spinner" /></div>;
 
+  if (reports.length === 0) {
+    return (
+      <div className="page">
+        <div className="hero">
+          <div className="hero-icon">
+            <LogoMark size={20} />
+          </div>
+          <h1>A private record of your blood work, over time</h1>
+          <p className="lede">
+            Your doctor sends results as a PDF for one point in time. MyHemogram reads
+            each one, keeps every value on file, and lines them up so you can see how
+            a marker is actually trending — not just what it says today. Everything is
+            stored locally; nothing leaves this computer.
+          </p>
+          <div className="actions">
+            <Link to="/import" className="btn btn-primary">Upload your first report</Link>
+          </div>
+
+          <div className="feature-grid">
+            <div className="feature-item">
+              <div className="feature-icon"><DocumentIcon width={18} height={18} /></div>
+              <h3>Reads your lab PDF</h3>
+              <p>Upload the report as-is. Every result is pulled out and shown to you for a quick check before anything is saved.</p>
+            </div>
+            <div className="feature-item">
+              <div className="feature-icon"><CompareIcon width={18} height={18} /></div>
+              <h3>Compares two reports</h3>
+              <p>Put any two visits side by side and see exactly what moved, by how much, and in which direction.</p>
+            </div>
+            <div className="feature-item">
+              <div className="feature-icon"><TrendIcon width={18} height={18} /></div>
+              <h3>Tracks the trend</h3>
+              <p>Every analyte gets its own history and chart, with the reference range shown alongside it.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -43,24 +84,12 @@ export default function Dashboard() {
             </button>
           )}
           <Link to="/import" className="btn btn-sm">
-            + Import PDF
+            Upload report
           </Link>
         </div>
       </div>
 
-      {reports.length === 0 ? (
-        <div className="card">
-          <div className="empty-state">
-            <div className="brand-mark" />
-            <h3>No reports yet</h3>
-            <p>Import your first blood work PDF to start tracking results.</p>
-            <Link to="/import" className="btn btn-primary" style={{ marginTop: 12 }}>
-              Import a PDF
-            </Link>
-          </div>
-        </div>
-      ) : (
-        <div className="card">
+      <div className="card">
           <table>
             <thead>
               <tr>
@@ -102,8 +131,7 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
