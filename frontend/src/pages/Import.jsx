@@ -1,3 +1,9 @@
+// Two-step import, mirroring the backend's parse/save split (see
+// routers/reports.py's module docstring): api.parsePdf() only ever returns
+// a preview - nothing is saved until the user reviews it in <ReviewTable>
+// and hits "Save report", which is the only place api.createReport() gets
+// called. "Add manually" skips straight to that same review screen with an
+// empty result list instead of a parsed one.
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
@@ -18,10 +24,10 @@ const BLANK_RESULT = {
   ref_high: null,
   flag: "",
   notes: "",
+  needs_review: false,
 };
 
 export default function Import() {
-  const [mode, setMode] = useState("pdf"); // "pdf" | "manual"
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState(null);
@@ -47,7 +53,6 @@ export default function Import() {
   }
 
   function startManual() {
-    setMode("manual");
     setPreview({
       collected_on: new Date().toISOString().slice(0, 10),
       requested_on: null,
@@ -89,7 +94,7 @@ export default function Import() {
         reported_on: preview.reported_on || null,
         ordering_physician: preview.ordering_physician || null,
         source_filename: preview.source_filename || null,
-        results: preview.results.map(({ needs_review, ...r }) => r),
+        results: preview.results,
       };
       const saved = await api.createReport(payload, preview.upload_token);
       navigate(`/reports/${saved.id}`);
@@ -207,7 +212,7 @@ export default function Import() {
             <button className="btn btn-primary" disabled={saving || !preview.collected_on} onClick={handleSave}>
               {saving ? "Saving…" : "Save report"}
             </button>
-            <button className="btn" onClick={() => { setPreview(null); setMode("pdf"); }}>
+            <button className="btn" onClick={() => setPreview(null)}>
               Cancel
             </button>
           </div>

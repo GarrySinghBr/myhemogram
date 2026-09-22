@@ -69,7 +69,14 @@ function ResultRow({ result, onSaved, onDeleted }) {
             </div>
             <div className="field">
               <label>Flag</label>
-              <input value={form.flag || ""} onChange={(e) => setForm({ ...form, flag: e.target.value })} placeholder="H / L" />
+              {/* A select, not free text: FlagBadge matches "H"/"L" exactly,
+                  so a stray lowercase "h" here would silently stop showing
+                  as a flag anywhere in the app. */}
+              <select value={form.flag || ""} onChange={(e) => setForm({ ...form, flag: e.target.value || null })}>
+                <option value="">—</option>
+                <option value="H">High</option>
+                <option value="L">Low</option>
+              </select>
             </div>
           </div>
           <div className="toolbar">
@@ -98,6 +105,11 @@ function ResultRow({ result, onSaved, onDeleted }) {
         </td>
         <td>
           <FlagBadge flag={result.flag} />
+          {result.needs_review && (
+            <span className="review-badge" title="The parser wasn't confident reading this row - double check it against the original report.">
+              Check this
+            </span>
+          )}
         </td>
         <td>
           <Link className="link-btn" to={`/trends?analyte=${encodeURIComponent(result.analyte_name)}`}>trend</Link>
@@ -129,11 +141,12 @@ export default function ReportDetail() {
   const [allReports, setAllReports] = useState([]);
   const navigate = useNavigate();
 
-  function load() {
+  useEffect(() => {
     api.getReport(id).then(setReport).catch((e) => setError(e.message));
-  }
-
-  useEffect(load, [id]);
+  }, [id]);
+  // Only used to populate the "Compare with..." dropdown below - a failure
+  // here shouldn't block the page (the report itself already loaded above),
+  // so it's fine to just leave the list empty and swallow the error.
   useEffect(() => {
     api.listReports().then(setAllReports).catch(() => {});
   }, []);
@@ -259,6 +272,14 @@ export default function ReportDetail() {
                       <div className="field">
                         <label>Ref high</label>
                         <input value={newRow.ref_high ?? ""} onChange={(e) => setNewRow({ ...newRow, ref_high: e.target.value })} />
+                      </div>
+                      <div className="field">
+                        <label>Flag</label>
+                        <select value={newRow.flag || ""} onChange={(e) => setNewRow({ ...newRow, flag: e.target.value || null })}>
+                          <option value="">—</option>
+                          <option value="H">High</option>
+                          <option value="L">Low</option>
+                        </select>
                       </div>
                     </div>
                     <div className="toolbar">

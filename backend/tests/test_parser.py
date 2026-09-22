@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.parser import parse_pdf, parse_date
+from app.parser import parse_date, parse_pdf
 
 SAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "results", "CHEMISTRY and HEMATOLOGY.pdf")
 

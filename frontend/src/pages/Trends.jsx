@@ -67,6 +67,12 @@ export default function Trends() {
 
   useEffect(() => {
     if (!analytes) return;
+    // One request per analyte (for the grid's compact charts + sidebar
+    // sparklines) rather than a single combined endpoint - deliberately
+    // simple, since this only ever talks to localhost and a lab panel
+    // realistically has a few dozen analytes at most. Worth revisiting with
+    // a batched /analytes/trends endpoint if this app ever aggregates data
+    // across many more tests or talks to a remote backend.
     Promise.all(analytes.map((a) => api.analyteTrend(a.analyte_name))).then((results) => {
       const map = {};
       results.forEach((t) => (map[t.analyte_name] = t.points));
@@ -75,6 +81,9 @@ export default function Trends() {
         setParams({ analyte: analytes[0].analyte_name }, { replace: true });
       }
     });
+    // Intentionally only re-runs when the analyte list itself changes, not
+    // on every `selected` change from clicking around the list - `selected`
+    // is read here only to seed an initial default, not to react to.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analytes]);
 

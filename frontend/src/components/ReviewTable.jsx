@@ -21,6 +21,10 @@ export default function ReviewTable({ results, onChange, onDelete, onAdd }) {
 
   function update(idx, key, value) {
     const patch = { [key]: value };
+    // The Value column is free text (it may carry a comparator like ">=120."
+    // that the display keeps but a chart/comparison needs stripped out), so
+    // editing it re-derives value_numeric from whatever's typed rather than
+    // trusting the previous parse.
     if (key === "value_text") patch.value_numeric = toNumeric(value);
     if (key === "ref_low" || key === "ref_high") patch[key] = value === "" ? null : parseFloat(value);
     onChange(idx, patch);
@@ -39,6 +43,10 @@ export default function ReviewTable({ results, onChange, onDelete, onAdd }) {
           </tr>
         </thead>
         <tbody>
+          {/* Index-as-key is normally a smell, but these rows have no
+              identity of their own yet - they're an unsaved parser preview,
+              not database records - so there's nothing more stable to key
+              on until the user confirms and a real result id exists. */}
           {results.map((r, idx) => (
             <Fragment key={idx}>
               <tr style={r.needs_review ? { background: "var(--serious-soft)" } : undefined}>
@@ -48,6 +56,7 @@ export default function ReviewTable({ results, onChange, onDelete, onAdd }) {
                       value={r[f.key] ?? ""}
                       onChange={(e) => update(idx, f.key, e.target.value)}
                       style={{ minWidth: f.width }}
+                      inputMode={f.numeric ? "decimal" : "text"}
                     />
                   </td>
                 ))}

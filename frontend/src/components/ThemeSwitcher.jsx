@@ -7,11 +7,18 @@ export default function ThemeSwitcher() {
   const [activeId, setActiveId] = useState(getStoredThemeId);
   const boxRef = useRef(null);
 
+  // Runs once on mount to apply whatever was saved from a previous visit.
+  // Deliberately not re-run when activeId changes afterwards - pick() below
+  // already calls applyTheme itself, so doing it again here on every click
+  // would just be redundant work with the same result.
   useEffect(() => {
     applyTheme(activeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The OS/browser can flip light<->dark while this component is already
+  // mounted (system setting, scheduled dark mode, ...); re-apply the active
+  // theme so it picks the right one of its light/dark variants.
   useEffect(() => watchSystemColorScheme(() => applyTheme(activeId)), [activeId]);
 
   useEffect(() => {

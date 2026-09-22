@@ -1,6 +1,10 @@
 import { rangePosition, refRangeLabel } from "../utils";
 
 export default function RangeBar({ result }) {
+  // rangePosition maps a value onto the same padded [low, high] scale
+  // regardless of what the value itself is - reusing it for low/high
+  // themselves gives us where the reference band's own edges fall on the
+  // bar, so the shaded "normal" track lines up with where the marker will.
   const pos = rangePosition(result.value_numeric, result.ref_low, result.ref_high);
   const lowPct = rangePosition(result.ref_low, result.ref_low, result.ref_high);
   const highPct = rangePosition(result.ref_high, result.ref_low, result.ref_high);

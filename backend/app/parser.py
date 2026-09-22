@@ -43,7 +43,7 @@ CHROME_STARTS = (
 
 NUMERIC_START_RE = re.compile(r"^(?:[<>]=?)?\s*-?\d")
 DATE_RE = re.compile(r"[A-Za-z]{3}/\d{2}/\d{4}")
-PUA_RE = re.compile(r"[-]")  # private-use-area icon glyphs
+PUA_RE = re.compile("[" + chr(0xE000) + "-" + chr(0xF8FF) + "]")  # PDF icon glyphs live in the Unicode Private Use Area
 
 # Small, fixed set of English function/descriptive words used only to decide
 # whether a stray line of text is prose (an interpretive comment) rather than
@@ -88,6 +88,9 @@ def _join_name(parts: list[str]) -> str:
 
 
 def _dedupe_join(fragments: list[str]) -> str:
+    """Join fragments with spaces, dropping a fragment that's an exact
+    (case-insensitive) repeat of the one before it - the source PDF often
+    prints a unit twice (once inline, once as a small badge)."""
     out: list[str] = []
     for frag in fragments:
         frag = frag.strip()
@@ -134,6 +137,9 @@ class ParsedReport:
 
 
 def _parse_value(text: str) -> tuple[Optional[float], Optional[str]]:
+    """Split a result like '>=120.' into (120.0, '>='). Returns (None, None)
+    for anything that doesn't start with a number (categorical results like
+    HbA1c's text stay in value_text only, with value_numeric left unset)."""
     m = re.match(r"^(<=|>=|<|>)?\s*(-?\d+\.?\d*)", text)
     if not m:
         return None, None
@@ -145,6 +151,15 @@ def _parse_value(text: str) -> tuple[Optional[float], Optional[str]]:
 
 
 def _parse_ref_range(text: Optional[str]) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """Best-effort split of a reference-range string into (low, high, unit).
+
+    Handles a plain 'A - B unit' range and one-sided '>=A' / '<B' ranges.
+    Falls back to (None, None, unit-or-None) for anything else, which in
+    practice means a categorical range like HbA1c's - see parse_pdf's
+    handling of comment-vs-range classification for why those end up as
+    free text in notes rather than a value this function can parse; a
+    caller getting all-None back from a non-empty string isn't a bug, it's
+    "this reference range isn't a simple numeric interval"."""
     if not text:
         return None, None, None
     cleaned = text.strip()
@@ -161,6 +176,8 @@ def _parse_ref_range(text: Optional[str]) -> tuple[Optional[float], Optional[flo
             high = float(m3.group(1))
     unit = None
     for tok in reversed(cleaned.split()):
+        # Skip a lone "M"/"F" sex-prefix token ("M: 7.6 - 31.4 nmol/L") so
+        # it isn't mistaken for a two-letter unit.
         if re.search(r"[A-Za-z]", tok) and tok.rstrip(":").upper() not in {"M", "F"}:
             unit = tok
             break

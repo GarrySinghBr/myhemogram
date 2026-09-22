@@ -1,10 +1,26 @@
+"""Report CRUD, plus the two-step PDF import flow.
+
+Importing a PDF is deliberately split into two requests instead of one:
+
+  1. POST /reports/parse - upload the file, parse it, get back a preview.
+     Nothing is written to the database. The uploaded file is written to a
+     staging directory (keyed by a random token) so we don't have to ask the
+     browser to re-upload it once the user has reviewed the parsed data.
+  2. POST /reports - the user has edited the preview in the UI (fixed a
+     misread value, deleted a bogus row, whatever) and confirms; *that*
+     payload is what actually gets saved. If it came from a parsed PDF, the
+     staged file is moved into permanent storage at this point.
+
+This means the parser can misfire and the user simply never gets to step 2 -
+nothing bad is persisted - and it means we're never guessing at how to
+silently "fix" a bad parse server-side.
+"""
 import os
 import shutil
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -29,12 +45,12 @@ async def parse_report(file: UploadFile):
 
     try:
         parsed = parse_pdf(staged_path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as a 422, not a 500
         os.remove(staged_path)
         raise HTTPException(422, f"Could not parse this PDF: {exc}") from exc
 
     results = [
-        schemas.ParsedResultPreview(
+        schemas.ResultIn(
             panel=r.panel,
             group_name=r.group_name,
             analyte_name=r.analyte_name,
@@ -64,10 +80,18 @@ async def parse_report(file: UploadFile):
     )
 
 
-def _report_to_result_counts(report: models.Report) -> tuple[int, int]:
+def _result_counts(report: models.Report) -> tuple[int, int]:
     total = len(report.results)
     abnormal = sum(1 for r in report.results if r.flag)
     return total, abnormal
+
+
+def _sync_needs_review(report: models.Report) -> None:
+    """Report.needs_review just mirrors "does any result still need a
+    look" - recomputed here instead of stored redundantly, so it can never
+    drift out of sync with the results that determine it. Call this after
+    any change to a report's result set."""
+    report.needs_review = any(r.needs_review for r in report.results)
 
 
 @router.get("/reports", response_model=list[schemas.ReportSummaryOut])
@@ -75,7 +99,7 @@ def list_reports(db: Session = Depends(get_db)):
     reports = db.query(models.Report).order_by(models.Report.collected_on.desc()).all()
     out = []
     for r in reports:
-        total, abnormal = _report_to_result_counts(r)
+        total, abnormal = _result_counts(r)
         out.append(
             schemas.ReportSummaryOut(
                 id=r.id,
@@ -98,14 +122,17 @@ def create_report(payload: schemas.ReportIn, upload_token: str | None = None, db
         reported_on=payload.reported_on,
         ordering_physician=payload.ordering_physician,
         source_filename=payload.source_filename,
-        needs_review=False,
     )
     db.add(report)
-    db.flush()
+    db.flush()  # assigns report.id, needed as the FK below
 
     for r in payload.results:
         db.add(models.Result(report_id=report.id, **r.model_dump()))
+    db.flush()  # populate report.results before _sync_needs_review reads it
+    _sync_needs_review(report)
 
+    # A parsed-PDF report carries the token handed out by /reports/parse;
+    # a manually-entered one has none, so there's nothing to move.
     if upload_token:
         staged_path = os.path.join(STAGING_DIR, f"{upload_token}.pdf")
         if os.path.exists(staged_path):
@@ -130,6 +157,9 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
 
 @router.put("/reports/{report_id}", response_model=schemas.ReportOut)
 def update_report(report_id: int, payload: schemas.ReportIn, db: Session = Depends(get_db)):
+    """Updates report-level metadata only (date, physician, ...) - individual
+    results have their own endpoints below rather than being replaced
+    wholesale here, so editing one value never risks clobbering the rest."""
     report = db.get(models.Report, report_id)
     if not report:
         raise HTTPException(404, "Report not found")
@@ -149,7 +179,7 @@ def delete_report(report_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Report not found")
     if report.source_pdf_path and os.path.exists(report.source_pdf_path):
         os.remove(report.source_pdf_path)
-    db.delete(report)
+    db.delete(report)  # cascades to its results, see models.Report.results
     db.commit()
 
 
@@ -168,6 +198,8 @@ def add_result(report_id: int, payload: schemas.ResultIn, db: Session = Depends(
         raise HTTPException(404, "Report not found")
     result = models.Result(report_id=report_id, **payload.model_dump())
     db.add(result)
+    db.flush()
+    _sync_needs_review(report)
     db.commit()
     db.refresh(result)
     return result
@@ -178,8 +210,13 @@ def update_result(result_id: int, payload: schemas.ResultIn, db: Session = Depen
     result = db.get(models.Result, result_id)
     if not result:
         raise HTTPException(404, "Result not found")
-    for key, value in payload.model_dump().items():
+    data = payload.model_dump()
+    # Someone editing a row through the UI is a human confirming/correcting
+    # it, which is exactly what needs_review was flagging as missing.
+    data["needs_review"] = False
+    for key, value in data.items():
         setattr(result, key, value)
+    _sync_needs_review(result.report)
     db.commit()
     db.refresh(result)
     return result
@@ -190,5 +227,8 @@ def delete_result(result_id: int, db: Session = Depends(get_db)):
     result = db.get(models.Result, result_id)
     if not result:
         raise HTTPException(404, "Result not found")
+    report = result.report
     db.delete(result)
+    db.flush()
+    _sync_needs_review(report)
     db.commit()

@@ -1,7 +1,8 @@
 {
-  "name": "frontend",
+  "name": "myhemogram-frontend",
+  "description": "React frontend for MyHemogram - dashboard, PDF import review, compare, and trend views.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

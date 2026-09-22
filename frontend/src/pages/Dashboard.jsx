@@ -30,6 +30,10 @@ export default function Dashboard() {
   if (error) return <div className="page"><div className="error-banner">{error}</div></div>;
   if (!reports) return <div className="page"><span className="spinner" /></div>;
 
+  // First run, before any report exists, this page doubles as the app's
+  // landing page - explaining what it does - rather than an empty table
+  // with nothing to click on. Once there's real data the plain report list
+  // below is more useful than repeating that pitch on every visit.
   if (reports.length === 0) {
     return (
       <div className="page">

@@ -1,3 +1,10 @@
+"""Pydantic request/response shapes for the API.
+
+The naming convention throughout is `<Thing>In` for what a client sends and
+`<Thing>Out` for what we return - kept as separate classes (rather than one
+schema reused both ways) so a response can safely include server-assigned
+fields like `id` without also making them settable on the way in.
+"""
 from datetime import date, datetime
 from typing import Optional
 
@@ -6,7 +13,13 @@ from pydantic import BaseModel, ConfigDict
 
 class ResultIn(BaseModel):
     """Payload for creating/editing a single result, whether it came from the
-    parser preview or was typed in by hand."""
+    parser preview or was typed in by hand.
+
+    `needs_review` starts out set by the parser when it couldn't confidently
+    read a value (see parser.py's ParsedResult.needs_review) and is cleared
+    the moment a person edits that row through the UI - it's a "the machine
+    wasn't sure about this one" flag, not a permanent property of the data.
+    """
 
     panel: Optional[str] = None
     group_name: Optional[str] = None
@@ -21,6 +34,7 @@ class ResultIn(BaseModel):
     ref_high: Optional[float] = None
     flag: Optional[str] = None
     notes: Optional[str] = None
+    needs_review: bool = False
 
 
 class ResultOut(ResultIn):
@@ -47,6 +61,9 @@ class ReportOut(BaseModel):
     ordering_physician: Optional[str] = None
     source_filename: Optional[str] = None
     imported_at: datetime
+    # True if any result on this report still has needs_review set - kept in
+    # sync by the reports router whenever a result is added, edited, or
+    # removed (see _sync_needs_review), not computed on read.
     needs_review: bool
     results: list[ResultOut] = []
 
@@ -62,17 +79,17 @@ class ReportSummaryOut(BaseModel):
     abnormal_count: int
 
 
-class ParsedResultPreview(ResultIn):
-    needs_review: bool = False
-
-
 class ParsePreview(BaseModel):
+    """What POST /reports/parse hands back: nothing here is saved yet - the
+    frontend shows it as an editable review table and only persists it if
+    the user confirms (POST /reports)."""
+
     collected_on: Optional[date] = None
     requested_on: Optional[date] = None
     reported_on: Optional[date] = None
     ordering_physician: Optional[str] = None
     panels: list[str] = []
-    results: list[ParsedResultPreview] = []
+    results: list[ResultIn] = []
     source_filename: Optional[str] = None
     upload_token: Optional[str] = None
 

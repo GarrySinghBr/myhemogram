@@ -8,6 +8,10 @@ function DeltaCell({ delta, percentChange }) {
   if (delta == null) return <span className="muted">—</span>;
   const up = delta > 0;
   const flat = delta === 0;
+  // Red-for-up / green-for-down is a plain directional cue (did the number
+  // get bigger or smaller), not a clinical verdict - a rising value isn't
+  // necessarily bad, nor a falling one good. Reading whether that direction
+  // matters still means looking at the flag/reference range next to it.
   const color = flat ? "var(--text-muted)" : up ? "var(--critical)" : "var(--good)";
   return (
     <span className="num" style={{ color }}>

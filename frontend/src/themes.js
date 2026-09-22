@@ -5,9 +5,10 @@
 // actual layout, just the accent and alert colors. "EKG Monitor" is the one
 // theme that intentionally departs from that base for its own look.
 //
-// Applied by setting CSS custom properties directly on <html>, so every
-// component that reads var(--critical) etc. (CSS, and chart code that reads
-// getComputedStyle) picks it up immediately - no rebuild needed.
+// Applied by setting CSS custom properties directly on <html>, so anything
+// referencing var(--critical) etc. - plain CSS, or a chart passing that same
+// var() string through as an SVG stroke/fill (see TrendChart.jsx) - re-colors
+// immediately. No React re-render or rebuild needed for a theme switch.
 
 const THEME_VARS = [
   "--accent", "--accent-ink", "--accent-soft",

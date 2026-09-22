@@ -1,3 +1,9 @@
+// Thin fetch wrappers around the FastAPI backend. Every call resolves to
+// parsed JSON (or null for a 204) and rejects with a plain Error whose
+// `.message` is the backend's own `detail` string - every page in this app
+// just does `.catch((e) => setError(e.message))` and renders that, so a
+// good HTTPException(400, "...") message on the backend is what the user
+// actually sees on screen.
 const BASE = "/api";
 
 async function handle(res) {
@@ -7,7 +13,7 @@ async function handle(res) {
       const body = await res.json();
       detail = body.detail || detail;
     } catch {
-      // ignore
+      // Response body wasn't JSON (or was empty) - fall back to statusText.
     }
     throw new Error(detail);
   }

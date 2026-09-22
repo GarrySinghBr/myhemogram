@@ -1,5 +1,8 @@
 export function formatDate(iso) {
   if (!iso) return "—";
+  // new Date("2025-11-03") parses as UTC midnight, which renders as Nov 2nd
+  // in any timezone behind UTC - appending a local time-of-day avoids that
+  // off-by-one-day display bug.
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
@@ -25,7 +28,7 @@ export function flagClass(flag) {
   return "normal";
 }
 
-/** Position (0-100) of a value along [low, high], padded 20% either side so
+/** Position (0-100) of a value along [low, high], padded 25% either side so
  * points near/outside the reference band are still visible on the bar. */
 export function rangePosition(value, low, high) {
   if (value == null || low == null || high == null || high <= low) return null;

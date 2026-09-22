@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+"""Cross-report views: everything here reads across multiple reports by
+analyte name, which is why it's split out from routers/reports.py (that
+file is scoped to a single report at a time)."""
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -9,6 +12,8 @@ router = APIRouter(prefix="/api", tags=["analytes"])
 
 @router.get("/analytes", response_model=list[schemas.AnalyteSummary])
 def list_analytes(db: Session = Depends(get_db)):
+    """One row per distinct analyte name ever seen, with its latest value -
+    powers the Trends page's card grid and sidebar list."""
     rows = (
         db.query(models.Result, models.Report.collected_on)
         .join(models.Report, models.Result.report_id == models.Report.id)
@@ -23,11 +28,18 @@ def list_analytes(db: Session = Depends(get_db)):
         )
         entry["count"] += 1
         entry["unit"] = result.unit or entry["unit"]
+        # Rows arrive oldest-first (see the query above), so ">=" here means
+        # a same-day report later in iteration order wins as "latest" - an
+        # arbitrary but stable tiebreak for the rare case of two reports
+        # collected on the same date.
         if entry["latest_date"] is None or collected_on >= entry["latest_date"]:
             entry["latest_date"] = collected_on
             entry["latest"] = result
 
     out = []
+    # Plain sorted() would put "eGFR" dead last (lowercase sorts after every
+    # uppercase letter in a byte-order comparison) - .lower() sorts analytes
+    # the way a person reading the list alphabetically would expect.
     for name, entry in sorted(by_name.items(), key=lambda kv: kv[0].lower()):
         latest: models.Result = entry["latest"]
         out.append(
@@ -46,6 +58,10 @@ def list_analytes(db: Session = Depends(get_db)):
 
 @router.get("/analytes/{analyte_name}/trend", response_model=schemas.AnalyteTrend)
 def analyte_trend(analyte_name: str, db: Session = Depends(get_db)):
+    """Full history for one analyte, oldest to newest - the line chart on
+    the Trends page. Matching is an exact, case-sensitive string compare
+    against Result.analyte_name (see models.py's module docstring for why
+    there's no separate analyte table to join against instead)."""
     rows = (
         db.query(models.Result, models.Report.collected_on, models.Report.id)
         .join(models.Report, models.Result.report_id == models.Report.id)
@@ -71,12 +87,34 @@ def analyte_trend(analyte_name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/compare", response_model=schemas.CompareOut)
-def compare_reports(report_ids: str = Query(..., description="Comma-separated report ids"), db: Session = Depends(get_db)):
-    ids = [int(x) for x in report_ids.split(",") if x.strip()]
-    reports = {
-        r.id: r
-        for r in db.query(models.Report).filter(models.Report.id.in_(ids)).all()
-    }
+def compare_reports(
+    report_ids: str = Query(..., description="Comma-separated report ids, e.g. '3,7'"),
+    db: Session = Depends(get_db),
+):
+    """Merges two or more reports into one table, keyed by analyte, for the
+    Compare page. `report_ids` is a single comma-separated query param
+    rather than a repeated one (`?report_ids=3&report_ids=7`) purely because
+    that's the simpler string to build a link/fetch call around on the
+    frontend - see api.js's `compare()`.
+
+    delta/percent_change are always first-vs-last of the ids *as given*, not
+    an average or a min/max - with exactly two ids (the only case the UI
+    currently offers) that's unambiguous; comparing more than two only
+    fills in each column's value; there's no combined "change" for a row
+    that isn't present in both the first and last report.
+    """
+    try:
+        ids = [int(x) for x in report_ids.split(",") if x.strip()]
+    except ValueError as exc:
+        raise HTTPException(400, "report_ids must be a comma-separated list of integers") from exc
+    if not ids:
+        raise HTTPException(400, "report_ids must not be empty")
+
+    reports = {r.id: r for r in db.query(models.Report).filter(models.Report.id.in_(ids)).all()}
+    # Preserve the order the caller asked for (and silently drop ids that no
+    # longer exist) rather than falling back to id or date order - the
+    # frontend relies on ordered_ids[0]/[-1] below being "first"/"last" the
+    # way the user picked them.
     ordered_ids = [i for i in ids if i in reports]
 
     by_analyte: dict[str, dict] = {}

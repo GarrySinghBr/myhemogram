@@ -1,3 +1,13 @@
+"""FastAPI entry point.
+
+Two ways to run this (see the repo README):
+  - Dev: this process serves only the /api/* routes, and Vite's own dev
+    server (port 5173) serves the frontend + proxies /api to here. Hence
+    the CORS allowance below - the browser sees two different origins.
+  - Single-port: `npm run build` once, then this process also serves the
+    built frontend directly (see the static mount at the bottom), so
+    there's only one origin and CORS doesn't come into play at all.
+"""
 import os
 
 from fastapi import FastAPI, HTTPException
