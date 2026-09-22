@@ -5,6 +5,7 @@ import ReportDetail from "./pages/ReportDetail";
 import Trends from "./pages/Trends";
 import Compare from "./pages/Compare";
 import { LogoMark } from "./components/icons";
+import ThemeSwitcher from "./components/ThemeSwitcher";
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
           </NavLink>
         </nav>
         <div className="topnav-spacer" />
+        <ThemeSwitcher />
         <NavLink to="/import" className="btn btn-primary btn-sm">
           Upload report
         </NavLink>

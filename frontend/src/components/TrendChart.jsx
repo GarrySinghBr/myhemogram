@@ -10,31 +10,35 @@ import {
 } from "recharts";
 import { formatDate } from "../utils";
 
-function isDarkMode() {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+// Colors are passed straight through as CSS var() references (not resolved
+// hex), the same way plain CSS would - so a chart already on screen
+// re-colors immediately when the color theme or light/dark mode changes,
+// with no re-render plumbing needed.
+const C = {
+  line: "var(--data-neutral)",
+  high: "var(--critical)",
+  low: "var(--serious)",
+  grid: "var(--hairline)",
+  axis: "var(--text-muted)",
+  band: "var(--data-band)",
+  surface: "var(--surface)",
+};
+
+function dotColor(flag) {
+  if (flag === "H") return C.high;
+  if (flag === "L") return C.low;
+  return C.line;
 }
 
-function palette() {
-  return isDarkMode()
-    ? { line: "#a4a199", high: "#dd8a76", low: "#d9ab68", grid: "#37352f", axis: "#85827b", band: "rgba(164,161,153,0.10)" }
-    : { line: "#6b6863", high: "#a83e2e", low: "#9c6425", grid: "#e4e1db", axis: "#8f8c86", band: "rgba(107,104,99,0.07)" };
-}
-
-function dotColor(flag, colors) {
-  if (flag === "H") return colors.high;
-  if (flag === "L") return colors.low;
-  return colors.line;
-}
-
-function makeDot(colors, radius) {
+function makeDot(radius) {
   return function Dot(props) {
     const { cx, cy, payload } = props;
     if (cx == null || cy == null) return null;
-    return <circle cx={cx} cy={cy} r={radius} fill={dotColor(payload.flag, colors)} stroke="var(--surface)" strokeWidth={1.5} />;
+    return <circle cx={cx} cy={cy} r={radius} fill={dotColor(payload.flag)} stroke={C.surface} strokeWidth={1.5} />;
   };
 }
 
-function CustomTooltip({ active, payload, colors }) {
+function CustomTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
@@ -43,7 +47,7 @@ function CustomTooltip({ active, payload, colors }) {
       <div className="num" style={{ marginTop: 2 }}>
         {p.comparator || ""}
         {p.value_numeric} {p.unit}
-        {p.flag && <span style={{ color: dotColor(p.flag, colors), marginLeft: 6, fontWeight: 700 }}>{p.flag}</span>}
+        {p.flag && <span style={{ color: dotColor(p.flag), marginLeft: 6, fontWeight: 700 }}>{p.flag}</span>}
       </div>
       {(p.ref_low != null || p.ref_high != null) && (
         <div className="muted">Ref: {p.ref_low ?? "–"} to {p.ref_high ?? "–"}</div>
@@ -53,7 +57,6 @@ function CustomTooltip({ active, payload, colors }) {
 }
 
 export default function TrendChart({ points, compact = false, height }) {
-  const colors = palette();
   const data = points.map((p) => ({ ...p, x: formatDate(p.collected_on) }));
   const latest = points[points.length - 1];
   const hasBand = latest && (latest.ref_low != null || latest.ref_high != null);
@@ -71,23 +74,23 @@ export default function TrendChart({ points, compact = false, height }) {
     <div style={{ width: "100%", height: height ?? (compact ? 96 : 280) }}>
       <ResponsiveContainer>
         <LineChart data={data} margin={compact ? { top: 4, right: 4, left: 4, bottom: 0 } : { top: 12, right: 20, left: 0, bottom: 4 }}>
-          {!compact && <CartesianGrid stroke={colors.grid} vertical={false} />}
+          {!compact && <CartesianGrid stroke={C.grid} vertical={false} />}
           <XAxis
             dataKey="x"
-            tick={compact ? false : { fontSize: 11, fill: colors.axis }}
+            tick={compact ? false : { fontSize: 11, fill: C.axis }}
             tickLine={false}
-            axisLine={compact ? false : { stroke: colors.grid }}
+            axisLine={compact ? false : { stroke: C.grid }}
             height={compact ? 4 : undefined}
           />
-          <YAxis hide={compact} tick={{ fontSize: 11, fill: colors.axis }} tickLine={false} axisLine={false} width={compact ? 0 : 40} domain={domain} />
-          <Tooltip content={<CustomTooltip colors={colors} />} />
-          {hasBand && <ReferenceArea y1={bandLow} y2={bandHigh} fill={colors.band} stroke="none" />}
+          <YAxis hide={compact} tick={{ fontSize: 11, fill: C.axis }} tickLine={false} axisLine={false} width={compact ? 0 : 40} domain={domain} />
+          <Tooltip content={<CustomTooltip />} />
+          {hasBand && <ReferenceArea y1={bandLow} y2={bandHigh} fill={C.band} stroke="none" />}
           <Line
             type="monotone"
             dataKey="value_numeric"
-            stroke={colors.line}
+            stroke={C.line}
             strokeWidth={compact ? 1.75 : 2}
-            dot={makeDot(colors, compact ? 3 : 4)}
+            dot={makeDot(compact ? 3 : 4)}
             activeDot={{ r: compact ? 4 : 6 }}
             connectNulls
           />

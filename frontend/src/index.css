@@ -19,10 +19,11 @@
   --accent-ink: #faf9f6;
   --accent-soft: #e9e7e3;
   --data-neutral: #6b6863;
-  --critical: #a83e2e;
-  --critical-soft: #f5e6e2;
-  --serious: #9c6425;
-  --serious-soft: #f2e8d8;
+  --data-band: rgba(107, 104, 99, 0.08);
+  --critical: #b3261e;
+  --critical-soft: #f6e6e4;
+  --serious: #3d5a80;
+  --serious-soft: #e6ecf3;
   --good: #3f6b42;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
   --radius: 8px;
@@ -44,10 +45,11 @@
     --accent-ink: #1e1d1b;
     --accent-soft: #37352f;
     --data-neutral: #a4a199;
-    --critical: #dd8a76;
-    --critical-soft: rgba(221, 138, 118, 0.16);
-    --serious: #d9ab68;
-    --serious-soft: rgba(217, 171, 104, 0.16);
+    --data-band: rgba(164, 161, 153, 0.12);
+    --critical: #e8776d;
+    --critical-soft: rgba(232, 119, 109, 0.16);
+    --serious: #7fa8d9;
+    --serious-soft: rgba(127, 168, 217, 0.16);
     --good: #7bab7e;
     --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
@@ -607,6 +609,92 @@ label {
   .feature-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---- Theme switcher ---- */
+.theme-switcher {
+  position: relative;
+}
+
+.theme-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 250px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  z-index: 20;
+}
+
+.theme-menu-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 6px 8px 4px;
+}
+
+.theme-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.theme-row:hover {
+  background: var(--surface-2);
+}
+
+.theme-row.active {
+  background: var(--accent-soft);
+}
+
+.theme-swatches {
+  display: flex;
+  flex: none;
+}
+
+.theme-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  margin-left: -4px;
+}
+
+.theme-dot:first-child {
+  margin-left: 0;
+}
+
+.theme-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.theme-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.theme-row-blurb {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- View toggle (segmented control) ---- */

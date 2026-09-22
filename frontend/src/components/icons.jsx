@@ -51,6 +51,17 @@ export function TrendIcon(props) {
   );
 }
 
+export function PaletteIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M12 3a9 8 0 1 0 0 16c1 0 1.5-.6 1.5-1.4 0-.4-.15-.7-.4-1-.25-.3-.4-.6-.4-1 0-.8.7-1.4 1.5-1.4H16a4 4 0 0 0 4-4c0-4-3.6-7.2-8-7.2Z" />
+      <circle cx="7.5" cy="10.5" r=".75" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="7.2" r=".75" fill="currentColor" stroke="none" />
+      <circle cx="14.5" cy="7.5" r=".75" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function DocumentIcon(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
