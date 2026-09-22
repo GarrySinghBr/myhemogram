@@ -5,13 +5,24 @@ own (Ontario-based) lab reports. Originally just wanted a way to track my
 bloodwork and biochemistry markers while dealing with Celiac's, but it grew
 to cover general lab tracking too.
 
-Upload the PDF your doctor's office gives you and it gets parsed into
+You upload the PDF your doctor's office gives you and it gets parsed into
 structured results you can browse, compare across visits, or chart over
-time. Everything runs on your own machine — no cloud, no accounts.
+time.
+
+Will likely add features as needed stemming from my personal need of them.
 
 ## Running it
 
 Needs Python 3.11+ and Node 18+.
+
+### Quick start
+
+Once you've done the first-time setup below, `run.sh` (Linux/macOS, or
+Windows via git-bash) or `run.bat` (double-click on Windows) builds the
+frontend and starts everything as a single process on
+**http://127.0.0.1:8899**. The two-terminal `npm run dev` + uvicorn setup
+further down only matters if you're actively editing the frontend and want
+hot-reload.
 
 ### Windows
 
@@ -60,18 +71,6 @@ npm run dev
 ```
 
 Open **http://localhost:5173**.
-
-### Single process
-
-Build the frontend once and the backend will serve it directly, so you only
-need one terminal after that:
-
-```
-cd frontend && npm run build
-cd ../backend && <venv-python> -m uvicorn app.main:app --port 8899
-```
-
-Open **http://127.0.0.1:8899**.
 
 ## Tests
 
