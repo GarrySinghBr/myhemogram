@@ -21,20 +21,59 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import pdfplumber
 
-# --- Column boundaries (x0 pixel position), calibrated from this report's own
-# header row: "NAME | RESULT | REF RANGE (UNITS) | ALERT | STATUS" ---
-COL_NAME_MAX = 160
-COL_RESULT_MAX = 355
-COL_REF_MAX = 445
-COL_ALERT_MAX = 485
-# >= COL_ALERT_MAX is STATUS (observed to always be blank in the sample, kept
-# for completeness / future reports that populate it)
+
+@dataclass
+class Columns:
+    """Column boundaries (x0 position): a word left of `name_max` is in NAME,
+    then RESULT, REF RANGE, ALERT, and anything past `alert_max` is STATUS.
+
+    The defaults were calibrated from the sample report's header row
+    ("NAME | RESULT | REF RANGE (UNITS) | ALERT | STATUS"), but
+    `_detect_columns` re-derives them from each PDF's own header so a report
+    laid out slightly differently (other margins, page width) still parses.
+    """
+    name_max: float = 160
+    result_max: float = 355
+    ref_max: float = 445
+    alert_max: float = 485
+
+
+def _detect_columns(header_words: dict[str, float]) -> Columns:
+    """Boundaries from the x0 of the header labels, using the same offsets the
+    hand-calibrated defaults had relative to them (result values start ~4pt
+    right of the boundary, wrapped ref text starts ~15pt left of the RESULT
+    -> REF boundary, etc.). Falls back to the defaults for anything missing."""
+    cols = Columns()
+    if "RESULT" in header_words and "REF" in header_words:
+        cols.name_max = header_words["RESULT"] - 4
+        cols.result_max = header_words["REF"] - 15
+        if "ALERT" in header_words:
+            cols.ref_max = header_words["ALERT"] - 7
+            if "STATUS" in header_words:
+                cols.alert_max = header_words["STATUS"] - 8
+            else:
+                cols.alert_max = cols.ref_max + 40
+    return cols
+
+
+class Row(NamedTuple):
+    words: list  # [(text, x0)] left to right
+    page: int
+    top: float
+    size: float  # font size, used to judge "is this the next line of the same block"
+    bold: bool  # every word bold: a group/section header, not an ordinary row
+    first_on_page: bool = False
+    last_on_page: bool = False
 
 HEADER_LABELS = {"NAME", "RESULT", "REF", "RANGE", "(UNITS)", "ALERT", "STATUS"}
+CHROME_PATTERNS = (
+    re.compile(r"reviewed this file", re.I),  # reviewer sign-off at the end...
+    re.compile(r"^[A-Z][a-z]{2} \d{1,2},? \d{4},? \d{1,2}:\d{2}\s*[AP]M$"),  # ...and its timestamp
+)
 CHROME_STARTS = (
     "ORDER PHYSICIAN", "REPORTED TO", "REQUESTED ON", "REPORTED ON",
     "ACCESSION NUMBER", "REPORTED BY", "LIST OF ABBREVIATIONS",
@@ -53,8 +92,24 @@ PUA_RE = re.compile("[" + chr(0xE000) + "-" + chr(0xF8FF) + "]")  # PDF icon gly
 EXTRA_STOPWORDS = {
     "control", "optimal", "sub", "non", "diabetic", "inadequate",
     "is", "of", "to", "in", "on", "at", "by", "no", "an", "as", "be", "if",
-    "are", "or", "and", "use",
+    "are", "or", "and", "use", "was", "the", "for", "with", "not", "may",
+    "see", "can", "has", "have", "this", "that", "than", "from", "when",
 }
+
+# Generic unit vocabulary, only used to recognise "this fragment is a
+# reference range / unit, not prose" -- like the stopwords, it isn't tied to
+# any particular analyte. Anything containing / % * ^ is treated as a unit
+# on shape alone (mmol/L, 10E9/L, mL/min/1.73m**2, %).
+UNIT_WORDS = {
+    "x", "fl", "pg", "ug", "mg", "g", "l", "dl", "ml", "hrs", "hr", "hours",
+    "iu", "u", "mol", "min", "sec", "mm", "cm", "kg", "ng", "nmol", "umol",
+    "mmol", "pmol", "meq", "mosm", "cells",
+}
+NUMBER_TOKEN_RE = re.compile(r"^[<>=]{0,2}-?\d[\d.,]*[.:]?$")
+OPERATOR_TOKENS = {"-", "–", "=", "<", ">", "<=", ">=", "to"}
+SEX_PREFIX_RE = re.compile(r"^(?:[MF]|male|female)s?:$", re.I)
+FUSED_NUMBER_UNIT_RE = re.compile(r"^([<>=]{0,2}-?\d+\.?\d*)(x\d.*)$")  # "0.09x10E9/L"
+UNIT_SHAPE_RE = re.compile(r"^[A-Za-z0-9µμ%*^./\-]{1,18}$")
 
 
 def _clean(text: str) -> str:
@@ -79,11 +134,13 @@ def _line_is_prose(tokens: list[str]) -> bool:
 
 def _join_name(parts: list[str]) -> str:
     """Join wrapped NAME-column fragments. A short (<=2 char) continuation is
-    usually a hard mid-word wrap (e.g. TESTOSTERO/NE -> TESTOSTERONE); a
-    longer one is usually a genuinely separate word (e.g. HEMOGLOBIN/A1c)."""
+    usually a hard mid-word wrap (e.g. TESTOSTERO/NE -> TESTOSTERONE) and a
+    fragment after a trailing hyphen continues the same word (NON-HDL- /
+    CHOLESTEROL); a longer one is usually a genuinely separate word (e.g.
+    HEMOGLOBIN/A1c)."""
     out = parts[0]
     for p in parts[1:]:
-        out = out + p if len(p) <= 2 else out + " " + p
+        out = out + p if (len(p) <= 2 or out.endswith("-")) else out + " " + p
     return out
 
 
@@ -102,10 +159,21 @@ def _dedupe_join(fragments: list[str]) -> str:
     return " ".join(out)
 
 
+def _normalize_name(name: str) -> str:
+    """Canonical analyte name so the same test matches across reports: single
+    spaces, no gap after a hyphen ("NON-HDL- CHOLESTEROL"), and a closing
+    bracket if the PDF clipped one off ("(CALC")."""
+    name = re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"(?<=-) (?=[A-Za-z])", "", name)
+    if name.count("(") > name.count(")"):
+        name += ")" * (name.count("(") - name.count(")"))
+    return name
+
+
 def _analyte_from_raw(raw_name: str) -> str:
     # A few names carry an inline group prefix ("RBC INDICES: MCV") -- the
     # part after the last colon is the actual analyte.
-    return raw_name.split(":")[-1].strip() if ":" in raw_name else raw_name
+    return _normalize_name(raw_name.split(":")[-1] if ":" in raw_name else raw_name)
 
 
 @dataclass
@@ -150,52 +218,127 @@ def _parse_value(text: str) -> tuple[Optional[float], Optional[str]]:
         return None, comparator
 
 
-def _parse_ref_range(text: Optional[str]) -> tuple[Optional[float], Optional[float], Optional[str]]:
-    """Best-effort split of a reference-range string into (low, high, unit).
+def _clean_value(text: str) -> str:
+    """The lab prints whole numbers with a trailing period ("67.", ">=120.")."""
+    text = text.strip()
+    return re.sub(r"(?<=\d)\.$", "", text)
+
+
+# --- Reference range / unit fragments -------------------------------------
+
+
+def _norm_unit(unit: str) -> str:
+    # The lab prints each unit twice, once human-style (x10E9/L) and once
+    # UCUM-style (10*9/L); keep the human-style spelling.
+    return re.sub(r"10\*(\d+)", r"10E\1", unit)
+
+
+def _is_unit_token(tok: str) -> bool:
+    if not UNIT_SHAPE_RE.match(tok) or tok.endswith(":"):
+        return False
+    if re.fullmatch(r"[\d.,]+", tok):
+        return False
+    if any(c in tok for c in "/%*^"):
+        return True
+    return tok.lower() in UNIT_WORDS
+
+
+def _tokenize_ref(tokens: list[str]) -> list[str]:
+    """Split fused number+unit tokens ("0.09x10E9/L") and re-join a unit the
+    PDF wrapped after a slash ("mL/min/" + "1.73m**2")."""
+    out: list[str] = []
+    for tok in " ".join(tokens).split():
+        m = FUSED_NUMBER_UNIT_RE.match(tok)
+        if m and _is_unit_token(m.group(2)):
+            out.extend([m.group(1), m.group(2)])
+        else:
+            out.append(tok)
+    joined: list[str] = []
+    for tok in out:
+        if joined and joined[-1].endswith("/") and _is_unit_token(tok):
+            joined[-1] += tok
+        else:
+            joined.append(tok)
+    return joined
+
+
+def _is_range_fragment(tokens: list[str]) -> bool:
+    """True if every token is something a reference range / unit is made of
+    (numbers, comparators, '-', 'M:'/'F:', unit-shaped words). Prose and
+    interpretive comments always contain at least one token that isn't."""
+    toks = _tokenize_ref(tokens)
+    if not toks:
+        return False
+    for tok in toks:
+        if NUMBER_TOKEN_RE.match(tok) or tok.lower() in OPERATOR_TOKENS:
+            continue
+        if SEX_PREFIX_RE.match(tok) or _is_unit_token(tok):
+            continue
+        return False
+    return True
+
+
+def _build_ref(tokens: list[str]) -> tuple[Optional[str], Optional[float], Optional[float], Optional[str]]:
+    """(ref_range_text, low, high, unit) from range-fragment tokens.
 
     Handles a plain 'A - B unit' range and one-sided '>=A' / '<B' ranges.
-    Falls back to (None, None, unit-or-None) for anything else, which in
-    practice means a categorical range like HbA1c's - see parse_pdf's
-    handling of comment-vs-range classification for why those end up as
-    free text in notes rather than a value this function can parse; a
-    caller getting all-None back from a non-empty string isn't a bug, it's
-    "this reference range isn't a simple numeric interval"."""
+    All-None low/high with a non-empty text isn't a bug, just "this
+    reference range isn't a simple numeric interval"."""
+    toks = _tokenize_ref(tokens)
+    body: list[str] = []
+    units: dict[str, str] = {}  # de-duplicated key -> spelling; the later copy wins (proper case)
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok.lower() == "x" and i + 1 < len(toks) and _is_unit_token(toks[i + 1]):
+            tok = "x " + toks[i + 1]
+            i += 1
+        i += 1
+        if tok.lower() in OPERATOR_TOKENS or NUMBER_TOKEN_RE.match(tok) or SEX_PREFIX_RE.match(tok):
+            body.append(re.sub(r"(?<=\d)\.$", "", tok))
+            continue
+        unit = _norm_unit(tok)
+        key = re.sub(r"\s", "", unit).lower()
+        units[key] = unit
+    unit_list = list(units.values())
+    unit_text = unit_list[0] if unit_list else None
+    text = " ".join(body + unit_list).strip() or None
     if not text:
-        return None, None, None
-    cleaned = text.strip()
+        return None, None, None, None
     low = high = None
-    m = re.search(r"(-?\d+\.?\d*)\s*-\s*(-?\d+\.?\d*)", cleaned)
+    num = r"(-?\d+\.?\d*)"
+    m = re.search(num + r"\s*-\s*" + num, " ".join(body))
     if m:
         low, high = float(m.group(1)), float(m.group(2))
     else:
-        m2 = re.search(r">=?\s*(-?\d+\.?\d*)", cleaned)
+        joined = " ".join(body)
+        m2 = re.search(r"(?:>=?|=)\s*" + num, joined)
         if m2:
             low = float(m2.group(1))
-        m3 = re.search(r"<=?\s*(-?\d+\.?\d*)", cleaned)
+        m3 = re.search(r"<=?\s*" + num, joined)
         if m3:
             high = float(m3.group(1))
-    unit = None
-    for tok in reversed(cleaned.split()):
-        # Skip a lone "M"/"F" sex-prefix token ("M: 7.6 - 31.4 nmol/L") so
-        # it isn't mistaken for a two-letter unit.
-        if re.search(r"[A-Za-z]", tok) and tok.rstrip(":").upper() not in {"M", "F"}:
-            unit = tok
-            break
-    return low, high, unit
+    return text, low, high, unit_text
 
 
-def _extract_rows(pdf) -> list[list[tuple[str, float]]]:
-    """One entry per visual row (list of (text, x0)) across all pages, with
-    repeating page chrome (headers/footers/legend/boilerplate) stripped out."""
-    rows: list[list[tuple[str, float]]] = []
-    for page in pdf.pages:
-        words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+# --- PDF -> rows -----------------------------------------------------------
+
+
+def _extract_rows(pdf) -> tuple[list[Row], Columns]:
+    """One entry per visual row across all pages, with repeating page chrome
+    (headers/footers/legend/boilerplate) stripped out, plus the column layout
+    read from the table header."""
+    rows: list[Row] = []
+    header_x: dict[str, float] = {}
+    for page_no, page in enumerate(pdf.pages):
+        words = page.extract_words(use_text_flow=False, keep_blank_chars=False, extra_attrs=["fontname", "size"])
         by_top: dict[int, list[dict]] = {}
         for w in words:
             text = _clean(w["text"])
             if not text:
                 continue
             by_top.setdefault(round(w["top"]), []).append({**w, "text": text})
+        page_rows: list[Row] = []
         for top in sorted(by_top.keys()):
             ws = sorted(by_top[top], key=lambda w: w["x0"])
             line_text = " ".join(w["text"] for w in ws)
@@ -203,27 +346,46 @@ def _extract_rows(pdf) -> list[list[tuple[str, float]]]:
             if upper.startswith("LIST OF ABBREVIATIONS"):
                 # Everything from here on is the abbreviation legend and
                 # reviewer sign-off -- not test data, for the rest of the doc.
-                return rows
+                rows.extend(_mark_page_edges(page_rows))
+                return rows, _detect_columns(header_x)
             if any(upper.startswith(c) for c in CHROME_STARTS):
                 continue
+            if any(p.search(line_text) for p in CHROME_PATTERNS):
+                continue
             if set(w["text"] for w in ws) <= HEADER_LABELS:
+                for w in ws:
+                    header_x.setdefault(w["text"].upper(), w["x0"])
                 continue
             if re.match(r"^Page \d+ of \d+$", line_text.strip()):
                 continue
-            rows.append([(w["text"], w["x0"]) for w in ws])
-    return rows
+            page_rows.append(Row(
+                words=[(w["text"], w["x0"]) for w in ws],
+                page=page_no,
+                top=min(w["top"] for w in ws),
+                size=max(w.get("size") or 0 for w in ws),
+                bold=all("bold" in (w.get("fontname") or "").lower() for w in ws),
+            ))
+        rows.extend(_mark_page_edges(page_rows))
+    return rows, _detect_columns(header_x)
 
 
-def _row_cols(row: list[tuple[str, float]]) -> dict[str, list[str]]:
+def _mark_page_edges(page_rows: list[Row]) -> list[Row]:
+    if page_rows:
+        page_rows[0] = page_rows[0]._replace(first_on_page=True)
+        page_rows[-1] = page_rows[-1]._replace(last_on_page=True)
+    return page_rows
+
+
+def _row_cols(row: Row, layout: Columns) -> dict[str, list[str]]:
     cols: dict[str, list[str]] = {"name": [], "result": [], "ref": [], "alert": [], "status": []}
-    for text, x0 in row:
-        if x0 < COL_NAME_MAX:
+    for text, x0 in row.words:
+        if x0 < layout.name_max:
             cols["name"].append(text)
-        elif x0 < COL_RESULT_MAX:
+        elif x0 < layout.result_max:
             cols["result"].append(text)
-        elif x0 < COL_REF_MAX:
+        elif x0 < layout.ref_max:
             cols["ref"].append(text)
-        elif x0 < COL_ALERT_MAX:
+        elif x0 < layout.alert_max:
             cols["alert"].append(text)
         else:
             cols["status"].append(text)
@@ -243,9 +405,42 @@ def _looks_like_result(name_tokens: list[str], result_tokens: list[str]) -> bool
     return False
 
 
+def _looks_like_categorical(cols: dict[str, list[str]]) -> bool:
+    """A result whose value is a word rather than a number ("NEGATIVE",
+    "Not Detected"): an analyte-style (all-caps or single-token) NAME plus a
+    short, non-prose RESULT. Deliberately narrow -- a false positive here
+    would turn a comment line into a fake result -- and such rows are always
+    flagged for review."""
+    name, result = cols["name"], cols["result"]
+    if not name or not 1 <= len(result) <= 3:
+        return False
+    name_txt = " ".join(name)
+    if not (name_txt == name_txt.upper() or len(name) == 1):
+        return False
+    if result[0][0].islower() or _line_is_prose(result) or _line_is_prose(name):
+        return False
+    return not cols["ref"] or _is_range_fragment(cols["ref"])
+
+
+def _panel_at(rows: list[Row], i: int, layout: Columns) -> Optional[str]:
+    """Panel name if row i is a panel header: an all-caps label followed
+    shortly by "Collected On <date>"."""
+    n = len(rows)
+    cols = _row_cols(rows[i], layout)
+    name_txt = " ".join(cols["name"])
+    lookahead_text = " ".join(" ".join(t for t, _ in rows[j].words) for j in range(i + 1, min(i + 3, n)))
+    if (
+        name_txt and not cols["result"] and not cols["ref"]
+        and "Collected" in lookahead_text and "On" in lookahead_text
+        and name_txt.strip().isupper()
+    ):
+        return name_txt.strip()
+    return None
+
+
 def parse_pdf(path: str) -> ParsedReport:
     with pdfplumber.open(path) as pdf:
-        rows = _extract_rows(pdf)
+        rows, layout = _extract_rows(pdf)
 
     report = ParsedReport(collected_on=None, requested_on=None, reported_on=None, ordering_physician=None)
 
@@ -255,57 +450,64 @@ def parse_pdf(path: str) -> ParsedReport:
     just_set_group = False
 
     pending: Optional[ParsedResult] = None
-    ref_fragments: list[str] = []
+    ref_tokens: list[str] = []
     note_fragments: list[str] = []
     in_notes = False
+    # Where the pending result's NAME column last had text -- the next
+    # name-only line is a wrap of that name only if it sits right below it.
+    name_pos: Optional[Row] = None
+    # Name-only lines seen before their result row (some layouts put a name's
+    # first line above the value, sometimes across a page break).
+    prefix: list[Row] = []
+
+    def near(prev: Row, row: Row) -> bool:
+        """Is `row` the next line of the same table cell as `prev`?"""
+        gap = 1.45 * (row.size or prev.size or 10.5)
+        if row.page == prev.page:
+            return 0 <= row.top - prev.top <= gap
+        return row.page == prev.page + 1 and prev.last_on_page and row.first_on_page
 
     def flush_pending():
-        nonlocal pending, ref_fragments, note_fragments, in_notes
+        nonlocal pending, ref_tokens, note_fragments, in_notes, name_pos
         if pending is not None:
-            extra_ref = _dedupe_join(ref_fragments)
-            if extra_ref:
-                pending.ref_range_text = _dedupe_join(
-                    ([pending.ref_range_text] if pending.ref_range_text else []) + [extra_ref]
-                )
-            if pending.ref_range_text:
-                low, high, unit = _parse_ref_range(pending.ref_range_text)
-                pending.ref_low = low if pending.ref_low is None else pending.ref_low
-                pending.ref_high = high if pending.ref_high is None else pending.ref_high
-                pending.unit = pending.unit or unit
+            if ref_tokens:
+                text, low, high, unit = _build_ref(ref_tokens)
+                pending.ref_range_text = text
+                pending.ref_low, pending.ref_high = low, high
+                pending.unit = unit
             if note_fragments:
                 pending.notes = _dedupe_join(note_fragments)
             report.results.append(pending)
         pending = None
-        ref_fragments = []
+        ref_tokens = []
         note_fragments = []
         in_notes = False
+        name_pos = None
 
+    has_panels = any(_panel_at(rows, k, layout) for k in range(len(rows)))
     n = len(rows)
     i = 0
     while i < n:
         row = rows[i]
-        cols = _row_cols(row)
+        cols = _row_cols(row, layout)
         name_txt = " ".join(cols["name"])
         result_txt = " ".join(cols["result"])
         ref_txt = " ".join(cols["ref"])
         alert_txt = " ".join(cols["alert"])
-        full_row_text = " ".join(t for t, _ in row)
+        full_row_text = " ".join(t for t, _ in row.words)
 
-        # --- Panel header: an all-caps label followed shortly by "Collected On <date>" ---
-        lookahead_text = " ".join(" ".join(t for t, _ in rows[j]) for j in range(i + 1, min(i + 3, n)))
-        if (
-            name_txt and not cols["result"] and not cols["ref"]
-            and "Collected" in lookahead_text and "On" in lookahead_text
-            and name_txt.strip().isupper()
-        ):
+        # --- Panel header ---
+        panel = _panel_at(rows, i, layout)
+        if panel:
             flush_pending()
-            current_panel = name_txt.strip()
+            prefix = []
+            current_panel = panel
             current_group = None
             awaiting_group_value = None
             just_set_group = False
             report.panels.append(current_panel)
             for j in range(i + 1, min(i + 3, n)):
-                dm = DATE_RE.search(" ".join(t for t, _ in rows[j]))
+                dm = DATE_RE.search(" ".join(t for t, _ in rows[j].words))
                 if dm:
                     if report.collected_on is None:
                         report.collected_on = dm.group(0)
@@ -330,10 +532,19 @@ def parse_pdf(path: str) -> ParsedReport:
             i += 1
             continue
 
-        has_name = bool(cols["name"])
-        is_result_row = _looks_like_result(cols["name"], cols["result"])
+        # Patient/lab letterhead before the first panel isn't table content.
+        if has_panels and current_panel is None:
+            i += 1
+            continue
 
-        if is_result_row:
+        has_name = bool(cols["name"])
+        is_numeric_row = _looks_like_result(cols["name"], cols["result"])
+        is_categorical_row = (
+            not is_numeric_row and not row.bold and (not in_notes or bool(cols["ref"]))
+            and _looks_like_categorical(cols)
+        )
+
+        if is_numeric_row or is_categorical_row:
             flush_pending()
             bare_value = not cols["result"]
             if bare_value:
@@ -342,71 +553,78 @@ def parse_pdf(path: str) -> ParsedReport:
             else:
                 raw_name = name_txt.strip()
                 value_source = result_txt
+            if prefix and near(prefix[-1], row):
+                raw_name = _join_name([" ".join(t for t, _ in p.words) for p in prefix] + [raw_name])
+            prefix = []
             value_numeric, comparator = _parse_value(value_source)
-            ref_low, ref_high, unit = _parse_ref_range(ref_txt)
+            ref_ok = bool(cols["ref"]) and _is_range_fragment(cols["ref"])
             pending = ParsedResult(
                 panel=current_panel or "",
                 group_name=current_group,
                 analyte_name=_analyte_from_raw(raw_name),
                 raw_name=raw_name,
-                value_text=value_source.strip(),
+                value_text=_clean_value(value_source),
                 value_numeric=value_numeric,
                 comparator=comparator,
-                unit=unit,
-                ref_range_text=ref_txt.strip() or None,
-                ref_low=ref_low,
-                ref_high=ref_high,
-                flag=alert_txt.strip() or None,
+                unit=None,
+                ref_range_text=None,
+                ref_low=None,
+                ref_high=None,
+                # An ALERT flag is a short code (H, L, HH, *...); anything
+                # longer is stray text that landed in the column.
+                flag=alert_txt.strip() if 0 < len(alert_txt.strip()) <= 4 else None,
                 notes=None,
                 needs_review=value_numeric is None,
             )
+            ref_tokens = list(cols["ref"]) if ref_ok else []
+            if cols["ref"] and not ref_ok:
+                in_notes = True
+                note_fragments.append(ref_txt)
+            name_pos = row
             current_group = None
             awaiting_group_value = None
             just_set_group = False
             i += 1
             continue
 
+        # --- Bold non-result row: a group header ("CREATININE", "DIFFERENTIAL WBC'S") ---
+        if row.bold and has_name:
+            flush_pending()
+            prefix = []
+            text = " ".join(cols["name"] + cols["result"]).strip()
+            current_group = _join_name([current_group or "", text]).strip() if just_set_group else text
+            awaiting_group_value = current_group
+            just_set_group = True
+            i += 1
+            continue
+
         if has_name and not cols["result"] and not cols["ref"]:
             fragment = name_txt.strip()
-            if pending is not None and not in_notes and not just_set_group and len(fragment) <= 4:
-                # Short mid-word wrap of the current pending result's name
-                # (e.g. "TESTOSTERO" + "NE", "LYMPHOCYTE" + "S", "...: MCV").
+            nxt = rows[i + 1] if i + 1 < n else None
+            if (
+                pending is not None and name_pos is not None and near(name_pos, row)
+                # A comment paragraph can also start in the NAME column, so once
+                # notes have begun only an analyte-style (all-caps) line counts
+                # as another line of the name.
+                and (not in_notes or fragment == fragment.upper())
+            ):
+                # Continuation line of the pending result's name (e.g.
+                # "TESTOSTERO" + "NE", "ALKALINE" / "PHOSPHATAS" / "E").
                 pending.raw_name = _join_name([pending.raw_name, fragment])
                 pending.analyte_name = _analyte_from_raw(pending.raw_name)
-            elif just_set_group:
-                # Second (or later) line of a multi-line group header, e.g.
-                # "DIFFERENTIAL" / "WBC'S".
-                current_group = _join_name([current_group or "", fragment]).strip()
-                awaiting_group_value = current_group
-            else:
-                # Look ahead (skipping further name-only lines) for a real
-                # result before deciding this introduces a new group.
-                j = i + 1
-                found_result = False
-                while j < n and j - i <= 4:
-                    jcols = _row_cols(rows[j])
-                    j_name_txt = " ".join(jcols["name"])
-                    if _looks_like_result(jcols["name"], jcols["result"]):
-                        found_result = True
-                        break
-                    if jcols["ref"] or jcols["alert"] or jcols["result"] or not j_name_txt:
-                        break
-                    j += 1
-                if found_result:
-                    current_group = fragment
-                    awaiting_group_value = fragment
-                    just_set_group = True
-                elif pending is not None and in_notes:
-                    # Stray word wrapped out of an in-progress comment
-                    # paragraph (e.g. "...if risk factors are\npresent").
-                    note_fragments.append(fragment)
-                elif pending is not None:
-                    pending.raw_name = _join_name([pending.raw_name, fragment])
-                    pending.analyte_name = _analyte_from_raw(pending.raw_name)
-                else:
-                    current_group = fragment
-                    awaiting_group_value = fragment
-                    just_set_group = True
+                name_pos = row
+            elif nxt is not None and _looks_like_result(*(_row_cols(nxt, layout)[k] for k in ("name", "result"))) and (
+                near(row, nxt) or (row.last_on_page and nxt.first_on_page)
+            ):
+                # First line(s) of the *next* result's name.
+                if prefix and not near(prefix[-1], row):
+                    prefix = []
+                prefix.append(row)
+            elif pending is not None:
+                # Stray word wrapped out of an in-progress comment paragraph
+                # (e.g. "...if risk factors are\npresent").
+                in_notes = True
+                note_fragments.append(fragment)
             i += 1
             continue
 
@@ -422,8 +640,8 @@ def parse_pdf(path: str) -> ParsedReport:
         if cols["result"] or cols["ref"] or cols["alert"]:
             fragment_tokens = cols["result"] + cols["ref"] + cols["alert"]
             if pending is not None:
-                if not in_notes and not _line_is_prose(fragment_tokens):
-                    ref_fragments.append(" ".join(fragment_tokens))
+                if not in_notes and _is_range_fragment(fragment_tokens):
+                    ref_tokens.extend(fragment_tokens)
                 else:
                     in_notes = True
                     note_fragments.append(" ".join(fragment_tokens))
@@ -433,6 +651,11 @@ def parse_pdf(path: str) -> ParsedReport:
         i += 1
 
     flush_pending()
+    if not report.results:
+        raise ValueError(
+            "no lab results found - this doesn't look like a NAME / RESULT / REF RANGE lab report "
+            "(is it a scanned image rather than a text PDF?)"
+        )
     return report
 
 
